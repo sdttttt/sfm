@@ -9,11 +9,12 @@ const GIB: u64 = 1024 * MIB;
 /// 状态栏标题里内存数值的显示风格。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MemStyle {
-    /// 显示已占用的具体大小，例如 `8.4G`。默认风格，也是菜单栏里信息量最大的
-    /// 一种 —— 单看数字就能判断是「占了 8G」还是「占了 800M」。
-    #[default]
+    /// 显示已占用的具体大小，例如 `8.4G`。想知道「到底占了多少 G」时切到它。
     Size,
-    /// 显示已用内存占总内存的百分比，例如 `53%`。
+    /// 显示已用内存占总内存的百分比，例如 `53%`。默认风格 —— 菜单栏宽度紧张，
+    /// 而百分比在任何机器上都稳定占三位宽，比 `8.4G` / `512M` / `10.7G` 这类
+    /// 随负载跳动的绝对值更容易一眼看出轻重。
+    #[default]
     Percent,
 }
 
@@ -159,10 +160,22 @@ mod tests {
     }
 
     #[test]
-    fn mem_style_from_unknown_index_falls_back_to_size() {
-        assert_eq!(MemStyle::from_index(-1), MemStyle::Size);
-        assert_eq!(MemStyle::from_index(2), MemStyle::Size);
-        assert_eq!(MemStyle::default(), MemStyle::Size);
+    fn mem_style_from_unknown_index_falls_back_to_percent() {
+        // 未知序号回退到默认风格（百分比）。注意这与持久化序号 0 代表的
+        // 「占用大小」是两回事：序号是存储格式，默认值是用户偏好。
+        assert_eq!(MemStyle::from_index(-1), MemStyle::Percent);
+        assert_eq!(MemStyle::from_index(2), MemStyle::Percent);
+        assert_eq!(MemStyle::default(), MemStyle::Percent);
+    }
+
+    #[test]
+    fn mem_style_index_mapping_is_stable() {
+        // 序号即持久化格式。改动会让已存过设置的用户看到另一种风格，因此锁定，
+        // 与「默认风格是哪个」无关。
+        assert_eq!(MemStyle::Size.index(), 0);
+        assert_eq!(MemStyle::Percent.index(), 1);
+        assert_eq!(MemStyle::from_index(0), MemStyle::Size);
+        assert_eq!(MemStyle::from_index(1), MemStyle::Percent);
     }
 
     #[test]
