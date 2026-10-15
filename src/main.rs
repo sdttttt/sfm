@@ -98,6 +98,7 @@ struct App {
     cpu: CpuSampler,
     snapshot: Snapshot,
     interval_secs: u64,
+    mem_style: format::MemStyle,
     /// 仅为保活而持有：让 AppKit 不会释放状态栏项（以及本进程）。
     _status_item: Retained<NSStatusItem>,
     button: Retained<NSStatusBarButton>,
@@ -129,7 +130,12 @@ impl App {
         }
 
         let title = attributed(
-            &format::status_title(self.snapshot.cpu, self.snapshot.mem_used),
+            &format::status_title(
+                self.snapshot.cpu,
+                self.snapshot.mem_used,
+                self.snapshot.mem_total,
+                self.mem_style,
+            ),
             &self.title_font,
             None,
         );
@@ -141,7 +147,12 @@ impl App {
         if self.debug {
             eprintln!(
                 "sfm: {} | {} | {} | {}",
-                format::status_title(self.snapshot.cpu, self.snapshot.mem_used),
+                format::status_title(
+                    self.snapshot.cpu,
+                    self.snapshot.mem_used,
+                    self.snapshot.mem_total,
+                    self.mem_style,
+                ),
                 format::cpu_row(self.snapshot.cpu),
                 format::mem_row(self.snapshot.mem_used, self.snapshot.mem_total),
                 format::swap_row(self.snapshot.swap_used),
@@ -190,8 +201,28 @@ impl App {
         self.refresh();
     }
 
+    /// 切换状态栏里内存的显示风格：立即重写标题、同步勾选并持久化。
+    fn set_mem_style(&mut self, style: format::MemStyle) {
+        if style == self.mem_style {
+            return;
+        }
+        self.mem_style = style;
+        prefs::set_mem_style(style);
+        if let Some(parts) = self.parts.as_ref() {
+            for (item_style, item) in &parts.mem_styles {
+                item.setState(if *item_style == style {
+                    NSControlStateValueOn
+                } else {
+                    NSControlStateValueOff
+                });
+            }
+        }
+        self.refresh();
+    }
+
     fn quit(&self) {
         prefs::set_refresh_secs(self.interval_secs);
+        prefs::set_mem_style(self.mem_style);
         prefs::synchronize();
         NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
             .terminate(None);
@@ -231,6 +262,16 @@ define_class!(
             self.app().set_interval(5);
         }
 
+        #[unsafe(method(setMemStyleSize:))]
+        fn on_mem_style_size(&self, _sender: *mut AnyObject) {
+            self.app().set_mem_style(format::MemStyle::Size);
+        }
+
+        #[unsafe(method(setMemStylePercent:))]
+        fn on_mem_style_percent(&self, _sender: *mut AnyObject) {
+            self.app().set_mem_style(format::MemStyle::Percent);
+        }
+
         #[unsafe(method(quit:))]
         fn on_quit(&self, _sender: *mut AnyObject) {
             self.app().quit();
@@ -253,6 +294,12 @@ impl MenuHandler {
 
         #[unsafe(method(setInterval5:))]
         fn set_interval_5(&self, sender: &AnyObject);
+
+        #[unsafe(method(setMemStyleSize:))]
+        fn set_mem_style_size(&self, sender: &AnyObject);
+
+        #[unsafe(method(setMemStylePercent:))]
+        fn set_mem_style_percent(&self, sender: &AnyObject);
 
         #[unsafe(method(quit:))]
         fn quit_menu(&self, sender: &AnyObject);
@@ -299,6 +346,7 @@ fn main() {
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
     let interval_secs = prefs::refresh_secs();
+    let mem_style = prefs::mem_style();
     let status_item =
         NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
     let button: Retained<NSStatusBarButton> = status_item
@@ -318,6 +366,7 @@ fn main() {
             swap_used: 0,
         },
         interval_secs,
+        mem_style,
         _status_item: status_item.clone(),
         button: button.clone(),
         title_font,
@@ -329,7 +378,7 @@ fn main() {
     }));
 
     let handler = MenuHandler::new(app_ptr);
-    let parts = menu::build(mtm, &handler, &prefs::INTERVALS, interval_secs);
+    let parts = menu::build(mtm, &handler, &prefs::INTERVALS, interval_secs, mem_style);
     let menu = parts.menu.clone();
     // SAFETY: `app_ptr` was just created and is not yet shared with the run
     // loop; the reference below is the only one that exists.
@@ -369,7 +418,10 @@ fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
     std::thread::sleep(std::time::Duration::from_millis(1200));
     app.refresh();
     let snap = app.snapshot;
-    println!("title: {}", format::status_title(snap.cpu, snap.mem_used));
+    println!(
+        "title: {}",
+        format::status_title(snap.cpu, snap.mem_used, snap.mem_total, app.mem_style)
+    );
     // 把文本从真实的状态栏按钮里读回来，以此证明数值确实送达了 AppKit，
     // 而不只是在自己的格式化代码里转了一圈。
     println!(
@@ -388,7 +440,12 @@ fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
     handler.refresh_now(&sender);
     println!(
         "after refreshNow: {}",
-        format::status_title(app.snapshot.cpu, app.snapshot.mem_used)
+        format::status_title(
+            app.snapshot.cpu,
+            app.snapshot.mem_used,
+            app.snapshot.mem_total,
+            app.mem_style,
+        )
     );
 
     handler.set_interval_5(&sender);
@@ -409,6 +466,42 @@ fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
         "after setInterval1: interval={} prefs={}",
         app.interval_secs,
         prefs::refresh_secs()
+    );
+
+    println!(
+        "after load: mem_style={:?} prefs={:?}",
+        app.mem_style,
+        prefs::mem_style()
+    );
+    handler.set_mem_style_percent(&sender);
+    println!(
+        "after setMemStylePercent: title={} prefs={:?}",
+        format::status_title(
+            app.snapshot.cpu,
+            app.snapshot.mem_used,
+            app.snapshot.mem_total,
+            app.mem_style,
+        ),
+        prefs::mem_style()
+    );
+    for (style, item) in &app.parts.as_ref().unwrap().mem_styles {
+        println!(
+            "  内存显示·{} checkmark={}",
+            menu::mem_style_title(*style),
+            item.state() == NSControlStateValueOn
+        );
+    }
+
+    handler.set_mem_style_size(&sender);
+    println!(
+        "after setMemStyleSize: title={} prefs={:?}",
+        format::status_title(
+            app.snapshot.cpu,
+            app.snapshot.mem_used,
+            app.snapshot.mem_total,
+            app.mem_style,
+        ),
+        prefs::mem_style()
     );
 
     // 退出动作会先落盘刷新间隔，再请求 AppKit 终止进程。

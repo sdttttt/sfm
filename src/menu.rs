@@ -6,7 +6,7 @@ use objc2::{sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem};
 use objc2_foundation::NSString;
 
-use crate::format;
+use crate::format::{self, MemStyle};
 
 /// 「刷新间隔 ▸ 1/2/5 秒」各菜单项对应的 selector。
 pub fn interval_selector(secs: u64) -> Sel {
@@ -17,13 +17,30 @@ pub fn interval_selector(secs: u64) -> Sel {
     }
 }
 
-/// 需要在每个 tick 重写文本的菜单项，以及各间隔选项本身。
+/// 「内存显示 ▸ 占用大小/百分比」各菜单项对应的 selector。
+pub fn mem_style_selector(style: MemStyle) -> Sel {
+    match style {
+        MemStyle::Size => sel!(setMemStyleSize:),
+        MemStyle::Percent => sel!(setMemStylePercent:),
+    }
+}
+
+/// 风格选项的标题，供菜单与自检共用。
+pub fn mem_style_title(style: MemStyle) -> &'static str {
+    match style {
+        MemStyle::Size => "占用大小",
+        MemStyle::Percent => "百分比",
+    }
+}
+
+/// 需要在每个 tick 重写文本的菜单项，以及各间隔、风格选项本身。
 pub struct MenuParts {
     pub menu: Retained<NSMenu>,
     pub cpu: Retained<NSMenuItem>,
     pub mem: Retained<NSMenuItem>,
     pub swap: Retained<NSMenuItem>,
     pub intervals: Vec<(u64, Retained<NSMenuItem>)>,
+    pub mem_styles: Vec<(MemStyle, Retained<NSMenuItem>)>,
 }
 
 fn new_item(mtm: MainThreadMarker, title: &str, action: Option<Sel>) -> Retained<NSMenuItem> {
@@ -65,6 +82,7 @@ pub fn build(
     target: &AnyObject,
     intervals: &[u64],
     selected: u64,
+    mem_style: MemStyle,
 ) -> MenuParts {
     let menu: Retained<NSMenu> =
         NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Sfm"));
@@ -97,6 +115,29 @@ pub fn build(
     interval_parent.setSubmenu(Some(&interval_menu));
     menu.addItem(&interval_parent);
 
+    let style_parent = new_item(mtm, "内存显示", None);
+    style_parent.setEnabled(true);
+    let style_menu: Retained<NSMenu> =
+        NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("内存显示"));
+    let mut style_items = Vec::with_capacity(MemStyle::ALL.len());
+    for style in MemStyle::ALL {
+        let item = action_item(
+            mtm,
+            target,
+            mem_style_title(style),
+            mem_style_selector(style),
+        );
+        item.setState(if style == mem_style {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        style_menu.addItem(&item);
+        style_items.push((style, item));
+    }
+    style_parent.setSubmenu(Some(&style_menu));
+    menu.addItem(&style_parent);
+
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     menu.addItem(&action_item(mtm, target, "退出 Sfm", sel!(quit:)));
 
@@ -106,5 +147,6 @@ pub fn build(
         mem,
         swap,
         intervals: interval_items,
+        mem_styles: style_items,
     }
 }
