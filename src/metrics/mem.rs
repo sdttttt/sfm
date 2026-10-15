@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 
-// `mach_host_self` is deprecated in favour of the `mach2` crate; a third
-// dependency is not worth one port lookup.
+// 官方推荐用 `mach2` crate 替代已废弃的 `mach_host_self`；但仅为一次端口
+// 查询就引入第三个依赖并不划算。
 #[allow(deprecated)]
 use libc::mach_host_self;
 use libc::{
@@ -11,7 +11,7 @@ use libc::{
 fn page_size() -> u64 {
     let mut size: libc::c_uint = 0;
     let mut len = std::mem::size_of::<libc::c_uint>() as libc::size_t;
-    // SAFETY: `size` is a live `c_uint` and `len` is its exact size.
+    // SAFETY: size 是一个存活的 c_uint，len 则是它的精确大小。
     let rc = unsafe {
         sysctlbyname(
             c"hw.pagesize".as_ptr(),
@@ -31,7 +31,7 @@ fn page_size() -> u64 {
 fn sysctl_u64(name: &[u8]) -> Option<u64> {
     let mut value: u64 = 0;
     let mut len = std::mem::size_of::<u64>() as libc::size_t;
-    // SAFETY: `value` is a live `u64` and `len` its exact size.
+    // SAFETY: value 是一个存活的 u64，len 是它的精确大小。
     let rc = unsafe {
         sysctlbyname(
             name.as_ptr().cast(),
@@ -47,14 +47,13 @@ fn sysctl_u64(name: &[u8]) -> Option<u64> {
     Some(value)
 }
 
-/// Physical memory in use: active + wired + compressed.
+/// 已用的物理内存：active + wired + compressed。
 ///
-/// The compressed page count is essential — omitting it under-reports by
-/// several gigabytes on a typical system.
+/// 压缩页数必须计入 —— 在典型机器上漏掉它会少报好几个 GB。
 #[allow(deprecated)]
 pub fn memory_used() -> Option<u64> {
-    // SAFETY: `HOST_VM_INFO64` fills a `vm_statistics64`; the count is passed by
-    // pointer and the buffer is zeroed before use.
+    // SAFETY: `HOST_VM_INFO64` 会填充一个 `vm_statistics64`；长度按指针传入，
+    // 缓冲区在使用前已置零。
     let stats = unsafe {
         let mut stats = MaybeUninit::<vm_statistics64>::uninit();
         let mut count = libc::HOST_VM_INFO64_COUNT;
@@ -74,18 +73,18 @@ pub fn memory_used() -> Option<u64> {
     Some(pages * page_size())
 }
 
-/// Installed physical memory, in bytes.
+/// 已安装的物理内存总量，单位为字节。
 pub fn total_memory() -> Option<u64> {
     sysctl_u64(b"hw.memsize\0")
 }
 
-/// Swap in use, in bytes.
+/// 已使用的交换空间，单位为字节。
 pub fn swap_used() -> Option<u64> {
-    // Newer SDKs append fields to `xsw_usage`, so read into a larger buffer and
-    // only interpret the leading `xsw_usage` layout.
+    // 较新的 SDK 会给 `xsw_usage` 追加字段，因此读入一个更大的缓冲区，
+    // 并且只解释开头那段 `xsw_usage` 布局。
     let mut buf = [0u8; 64];
     let mut len = buf.len();
-    // SAFETY: `buf` is 64 live bytes and `len` is its real size.
+    // SAFETY: buf 是 64 字节的存活缓冲区，len 是它的真实大小。
     let rc = unsafe {
         sysctlbyname(
             c"vm.swapusage".as_ptr(),
@@ -98,8 +97,8 @@ pub fn swap_used() -> Option<u64> {
     if rc != 0 || len < std::mem::size_of::<xsw_usage>() {
         return None;
     }
-    // SAFETY: `xsw_usage` is plain data with no padding requirements beyond
-    // alignment, and the kernel wrote `size_of::<xsw_usage>()` valid bytes.
+    // SAFETY: `xsw_usage` 是纯数据，除对齐外没有其他填充要求，且内核已写入
+    // `size_of::<xsw_usage>()` 个有效字节。
     let usage: xsw_usage = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast::<xsw_usage>()) };
     Some(usage.xsu_used)
 }

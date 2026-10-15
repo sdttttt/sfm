@@ -1,15 +1,15 @@
-//! Text formatting for the status item title and the menu rows.
+//! 状态栏标题与菜单各行的文本格式化。
 //!
-//! Pure string logic, unit tested in `cargo test` without a running app.
+//! 纯字符串逻辑，不依赖运行中的应用，因此可在 `cargo test` 中直接单测。
 
 const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
 const GIB: u64 = 1024 * MIB;
 
-/// `8.4G`, `512M`, `0K`.
+/// 输出形如 `8.4G`、`512M`、`0K`。
 ///
-/// Below 1 GiB the value is whole, because a tenth of a megabyte is noise in a
-/// menu bar; from 1 GiB up one decimal is enough resolution to be useful.
+/// 1 GiB 以下取整：在菜单栏里，0.1M 的精度纯属噪声；1 GiB 以上保留一位小数，
+/// 其分辨率已足够有用。
 pub fn format_bytes(bytes: u64) -> String {
     if bytes >= GIB {
         format!("{:.1}G", bytes as f64 / GIB as f64)
@@ -20,7 +20,7 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Rounds a `0.0..=1.0` load to the integer percentage shown in the menu bar.
+/// 把 `0.0..=1.0` 的负载四舍五入为菜单栏所显示的整数百分比。
 pub fn percent(cpu: f64) -> u32 {
     if !cpu.is_finite() || cpu <= 0.0 {
         return 0;
@@ -33,25 +33,25 @@ pub fn percent(cpu: f64) -> u32 {
     }
 }
 
-/// `" 12% 8.4G"`.
+/// 输出形如 `" 12% 8.4G"`。
 ///
-/// The percentage is right-aligned in a three character field so the memory
-/// figure never shifts sideways when the CPU goes from 9% to 10% or 99% to 100%.
+/// 百分比右对齐到 3 字符宽，这样当 CPU 从 9% 变到 10%、或从 99% 变到 100% 时，
+/// 后面的内存数值不会左右抖动。
 pub fn status_title(cpu: f64, mem_used: u64) -> String {
     format!("{:>3}% {}", percent(cpu), format_bytes(mem_used))
 }
 
-/// `"CPU 12%"`.
+/// 输出形如 `"CPU 12%"`。
 pub fn cpu_row(cpu: f64) -> String {
     format!("CPU {}%", percent(cpu))
 }
 
-/// `"内存 8.4G / 16.0G"`.
+/// 输出形如 `"内存 8.4G / 16.0G"`。
 pub fn mem_row(used: u64, total: u64) -> String {
     format!("内存 {} / {}", format_bytes(used), format_bytes(total))
 }
 
-/// `"Swap 1.2G"`.
+/// 输出形如 `"Swap 1.2G"`。
 pub fn swap_row(used: u64) -> String {
     format!("Swap {}", format_bytes(used))
 }

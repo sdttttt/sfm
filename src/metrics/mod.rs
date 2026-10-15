@@ -1,4 +1,4 @@
-//! System metric sampling. All `unsafe` FFI is confined to this module.
+//! 系统指标采样。所有对内核的裸 FFI 调用都收敛在本模块内。
 
 mod cpu;
 mod mem;
@@ -6,15 +6,15 @@ mod mem;
 pub use cpu::CpuSampler;
 pub use mem::{memory_used, swap_used, total_memory};
 
-/// A consistent view of the numbers shown in the status item and the menu.
+/// 状态栏项与菜单中所显示数值的统一视图。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Snapshot {
-    /// Fraction of non-idle time, `0.0..=1.0`.
+    /// 非空闲时间的占比，取值 `0.0..=1.0`。
     pub cpu: f64,
-    /// Physical memory in use (active + wired + compressed), in bytes.
+    /// 已用的物理内存（active + wired + compressed），单位为字节。
     pub mem_used: u64,
-    /// Physical memory installed, in bytes.
+    /// 已安装的物理内存总量，单位为字节。
     pub mem_total: u64,
-    /// Swap in use, in bytes.
+    /// 已使用的交换空间，单位为字节。
     pub swap_used: u64,
 }

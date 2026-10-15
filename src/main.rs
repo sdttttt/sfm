@@ -1,8 +1,7 @@
-//! Sfm — a menu bar CPU / memory monitor.
+//! Sfm —— 一个菜单栏 CPU / 内存监控工具。
 //!
-//! Everything runs on the main thread: the sampling calls are microsecond-scale
-//! kernel reads, so a main-queue timer is simpler and cheaper than a dedicated
-//! sampling thread plus cross-thread plumbing.
+//! 全部逻辑都跑在主线程上：采样只是微秒级的内核读取，因此用主队列定时器比
+//! 「专门的采样线程 + 跨线程数据搬运」更简单、也更划算。
 
 mod format;
 mod menu;
@@ -35,9 +34,9 @@ use metrics::{CpuSampler, Snapshot};
 
 const NANOS_PER_SEC: u64 = 1_000_000_000;
 
-// `dispatch_source_create` is a plain C function that `dispatch2` does not wrap
-// yet, so it is declared here. The returned source comes back with a +1 retain
-// count, which `DispatchRetained::from_raw` takes ownership of.
+// `dispatch_source_create` 是一个纯 C 函数，`dispatch2` 目前尚未包装它，
+// 因此在这里手工声明。返回值带 +1 的 retain 计数，由 `DispatchRetained::from_raw`
+// 接管所有权。
 extern "C" {
     fn dispatch_source_create(
         type_: *const dispatch_source_type_s,
@@ -47,35 +46,35 @@ extern "C" {
     ) -> *mut c_void;
 }
 
-/// Reinterprets a messageable object as `AnyObject`, which AppKit signatures
-/// (`id`) use for attribute values and targets.
+/// 把可发消息的对象重新解释为 `AnyObject` —— AppKit 的签名（`id`）用后者来
+/// 表示属性值和 target。
 fn any<T: Message>(object: &T) -> &AnyObject {
     let ptr: *const T = object;
-    // SAFETY: every `Message` is an Objective-C object pointer, so the two
-    // types have identical layout and validity.
+    // SAFETY: 任何 `Message` 都是 Objective-C 对象指针，这两个类型在内存布局
+    // 与有效性上完全等价。
     unsafe { &*ptr.cast::<AnyObject>() }
 }
 
 fn make_timer(secs: u64) -> DispatchRetained<DispatchSource> {
     let queue = DispatchQueue::main();
     let queue_ptr = DispatchObject::as_raw(queue).as_ptr().cast::<c_void>();
-    // SAFETY: `_dispatch_source_type_timer` is the timer source type; a timer
-    // uses neither a handle nor a mask, and `queue_ptr` is the main queue.
+    // SAFETY: `_dispatch_source_type_timer` 即定时器 source 类型；定时器既不
+    // 使用 handle 也不使用 mask，且 `queue_ptr` 就是主队列。
     let raw = unsafe { dispatch_source_create(&_dispatch_source_type_timer, 0, 0, queue_ptr) };
     let raw = NonNull::new(raw).expect("dispatch_source_create returned NULL");
-    // SAFETY: the pointer came from `dispatch_source_create` and is a live timer
-    // source owned with a +1 retain count.
+    // SAFETY: 该指针来自 `dispatch_source_create`，是一个带 +1 retain 计数的
+    // 存活定时器 source。
     let source = unsafe { DispatchRetained::from_raw(raw.cast::<DispatchSource>()) };
     source.set_timer(DispatchTime::NOW, secs * NANOS_PER_SEC, NANOS_PER_SEC / 10);
     source
 }
 
-/// Builds an attributed string in `font`, optionally tinted with `color`.
+/// 用 `font` 构造一段富文本字符串，可选地为它套上 `color` 着色。
 fn attributed(text: &str, font: &NSFont, color: Option<&NSColor>) -> Retained<NSAttributedString> {
     let attrs: Retained<NSMutableDictionary<NSAttributedStringKey, AnyObject>> =
         NSMutableDictionary::new();
-    // SAFETY: the keys are `NSString`s and the values are objects, which is what
-    // `-setObject:forKeyedSubscript:` expects.
+    // SAFETY: key 均为 `NSString`、value 均为对象，正是
+    // `-setObject:forKeyedSubscript:` 所要求的类型。
     unsafe {
         attrs.setObject_forKeyedSubscript(
             Some(any(font)),
@@ -99,23 +98,22 @@ struct App {
     cpu: CpuSampler,
     snapshot: Snapshot,
     interval_secs: u64,
-    /// Kept alive so AppKit keeps the status item (and this process) around.
+    /// 仅为保活而持有：让 AppKit 不会释放状态栏项（以及本进程）。
     _status_item: Retained<NSStatusItem>,
     button: Retained<NSStatusBarButton>,
     title_font: Retained<NSFont>,
     info_font: Retained<NSFont>,
     secondary: Retained<NSColor>,
-    /// `None` only between allocation and menu installation at startup.
+    /// 仅在启动时「分配 App」到「装好菜单」这一瞬间为 `None`。
     parts: Option<menu::MenuParts>,
     timer: DispatchRetained<DispatchSource>,
-    /// Set by `SFM_DEBUG=1`: log every frame to stderr.
+    /// 由 `SFM_DEBUG=1` 开启：把每一帧都记到 stderr。
     debug: bool,
 }
 
 impl App {
-    /// Samples every metric and rewrites the status item and the three info
-    /// rows. A failed sample keeps the previous value instead of dropping to
-    /// zero, which would read as "the machine went idle".
+    /// 采样全部指标，并重写状态栏项与那三行明细。某项采样失败时保留旧值，
+    /// 而不是归零 —— 归零看起来会像「机器突然空闲了」。
     fn refresh(&mut self) {
         if let Some(cpu) = self.cpu.sample(self.interval_secs) {
             self.snapshot.cpu = cpu;
@@ -171,8 +169,7 @@ impl App {
         parts.swap.setAttributedTitle(Some(&swap_text));
     }
 
-    /// Switches the refresh period in place: the timer source is reused, so the
-    /// change takes effect immediately without a restart.
+    /// 原地修改刷新周期：复用同一个 timer source，因此改动立即生效，无需重启。
     fn set_interval(&mut self, secs: u64) {
         if !prefs::INTERVALS.contains(&secs) || secs == self.interval_secs {
             return;
@@ -201,7 +198,7 @@ impl App {
     }
 }
 
-/// Instance variable holding the address of the [`App`] that owns the run loop.
+/// ObjC 实例变量，保存拥有 run loop 的那个 [`App`] 的地址。
 #[derive(Clone, Copy)]
 struct HandlerIvars {
     app: usize,
@@ -242,8 +239,8 @@ define_class!(
 );
 
 impl MenuHandler {
-    // Rust-side view of the menu actions, used by the self test to invoke the
-    // very selectors AppKit sends when a menu item is clicked.
+    // 从 Rust 侧调用这些菜单 action；自检正是用它来发送「点击菜单项时
+    // AppKit 真正会发的那些 selector」。
     extern_methods!(
         #[unsafe(method(refreshNow:))]
         fn refresh_now(&self, sender: &AnyObject);
@@ -262,8 +259,8 @@ impl MenuHandler {
     );
 
     fn new(app: *mut App) -> Retained<Self> {
-        // SAFETY: `alloc` returns a fresh, zeroed instance; the ivar holds a
-        // pointer that is valid for the rest of the process.
+        // SAFETY: `alloc` 返回一个全新的零值实例；ivar 中存放的指针在整个
+        // 进程生命周期内都有效。
         unsafe {
             let mtm = MainThreadMarker::new().expect("main thread");
             let this = Self::alloc(mtm).set_ivars(HandlerIvars { app: app as usize });
@@ -271,23 +268,23 @@ impl MenuHandler {
         }
     }
 
-    /// The handler only exists on the main thread, where the leaked [`App`] is
-    /// alive for the whole run loop.
+    /// 该 handler 只存在于主线程，而被故意泄漏的 [`App`] 在整个 run loop
+    /// 期间都存活。
     fn app(&self) -> &'static mut App {
-        // SAFETY: the ivar was set at construction time to a `Box::leak`ed
-        // pointer that is never freed, and actions arrive on the main thread.
+        // SAFETY: 该 ivar 在构造时被设为 `Box::leak` 得到的、永不释放的指针，
+        // 且所有 action 都在主线程抵达。
         unsafe { &mut *(self.ivars().app as *mut App) }
     }
 }
 
-/// Timer callback. Runs on the main queue once per refresh interval, with the
-/// `App` pointer that was installed as the source's context.
+/// 定时器回调。每个刷新周期在主队列上执行一次，`ctx` 即先前安装为该 source
+/// context 的那个 `App` 指针。
 extern "C" fn on_tick(ctx: *mut c_void) {
     if ctx.is_null() {
         return;
     }
-    // SAFETY: the context is the `Box::leak`ed `App` set up in `main`, and the
-    // timer runs on the main queue, where nothing else mutates it.
+    // SAFETY: context 是在 `main` 中设置的、被 `Box::leak` 的 `App`；定时器
+    // 运行在主队列上，没有别的代码会改动它。
     unsafe { (*ctx.cast::<App>()).refresh() };
 }
 
@@ -297,8 +294,8 @@ fn main() {
     let debug = std::env::var_os("SFM_DEBUG").is_some();
 
     let ns_app = NSApplication::sharedApplication(mtm);
-    // Accessory policy is the runtime equivalent of `LSUIElement=YES`: no Dock
-    // icon and no app menu.
+    // Accessory 策略等价于 Info.plist 里的 `LSUIElement=YES`：不显示 Dock 图标，
+    // 也不显示 app 菜单。
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
     let interval_secs = prefs::refresh_secs();
@@ -339,7 +336,7 @@ fn main() {
     let app = unsafe { &mut *app_ptr };
     app.parts = Some(parts);
 
-    // Both left and right clicks open this same menu — AppKit's default.
+    // 左右键点击都弹出这个菜单 —— 这是 AppKit 的默认行为。
     status_item.setMenu(Some(&menu));
 
     if run_selftest {
@@ -347,10 +344,9 @@ fn main() {
         return;
     }
 
-    // Sample once up front so the very first frame carries real data, then hand
-    // the app over to AppKit.
+    // 先采样一次，让第一帧就带上真实数据，之后再把 app 交给 AppKit。
     app.refresh();
-    // SAFETY: the context is only read by `on_tick` on the main queue.
+    // SAFETY: 该 context 只会被主队列上的 `on_tick` 读取。
     unsafe {
         app.timer.set_context(app_ptr.cast::<c_void>());
     }
@@ -360,22 +356,22 @@ fn main() {
     ns_app.run();
 }
 
-/// Exercises the menu wiring without a human clicking: builds the real status
-/// item and menu, then sends the exact selectors AppKit would send.
+/// 在无人点击的情况下校验菜单接线：构建真实的状态栏项与菜单，然后发送 AppKit
+/// 真正会发的那些 selector。
 ///
-/// Run with `sfm --selftest`. Prints one line per step and exits.
+/// 用 `sfm --selftest` 运行：每一步打印一行，随后退出。
 fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
     println!("interval loaded from prefs: {}", app.interval_secs);
     println!("status item visible: {}", app._status_item.isVisible());
 
-    // Two frames one second apart, so the CPU number is a real measurement.
+    // 取相隔一秒的两帧，这样 CPU 数值才是真实测量结果。
     app.refresh();
     std::thread::sleep(std::time::Duration::from_millis(1200));
     app.refresh();
     let snap = app.snapshot;
     println!("title: {}", format::status_title(snap.cpu, snap.mem_used));
-    // Read the text back out of the real status bar button, so this proves the
-    // value reached AppKit and not just our own formatting code.
+    // 把文本从真实的状态栏按钮里读回来，以此证明数值确实送达了 AppKit，
+    // 而不只是在自己的格式化代码里转了一圈。
     println!(
         "status item title: {}",
         app.button.attributedTitle().string()
@@ -388,7 +384,7 @@ fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
         panic!("menu was not installed");
     };
     let sender = parts.cpu.clone();
-    // These are the same selectors AppKit sends when the items are clicked.
+    // 下面这些正是 AppKit 在菜单项被点击时会发送的 selector。
     handler.refresh_now(&sender);
     println!(
         "after refreshNow: {}",
@@ -415,7 +411,7 @@ fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
         prefs::refresh_secs()
     );
 
-    // The quit action persists the interval and asks AppKit to terminate.
+    // 退出动作会先落盘刷新间隔，再请求 AppKit 终止进程。
     handler.quit_menu(&sender);
     println!("quit returned (process is still alive)");
 }

@@ -1,4 +1,4 @@
-//! Construction of the status item's drop-down menu.
+//! 构造状态栏项的下拉菜单。
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
@@ -8,7 +8,7 @@ use objc2_foundation::NSString;
 
 use crate::format;
 
-/// Selector for the "刷新间隔 ▸ 1/2/5 秒" items.
+/// 「刷新间隔 ▸ 1/2/5 秒」各菜单项对应的 selector。
 pub fn interval_selector(secs: u64) -> Sel {
     match secs {
         1 => sel!(setInterval1:),
@@ -17,7 +17,7 @@ pub fn interval_selector(secs: u64) -> Sel {
     }
 }
 
-/// The items whose text is rewritten on every tick, plus the interval items.
+/// 需要在每个 tick 重写文本的菜单项，以及各间隔选项本身。
 pub struct MenuParts {
     pub menu: Retained<NSMenu>,
     pub cpu: Retained<NSMenuItem>,
@@ -27,7 +27,7 @@ pub struct MenuParts {
 }
 
 fn new_item(mtm: MainThreadMarker, title: &str, action: Option<Sel>) -> Retained<NSMenuItem> {
-    // SAFETY: the item is initialised with a valid title and action selector.
+    // SAFETY: 该菜单项是用有效的标题与 action selector 初始化出来的。
     let item: Retained<NSMenuItem> = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
@@ -40,7 +40,7 @@ fn new_item(mtm: MainThreadMarker, title: &str, action: Option<Sel>) -> Retained
     item
 }
 
-/// A grey, non-actionable row that only reports a number.
+/// 灰显、不可点击、只用来展示数字的一行。
 fn info_item(mtm: MainThreadMarker, text: &str) -> Retained<NSMenuItem> {
     new_item(mtm, text, None)
 }
@@ -52,15 +52,14 @@ fn action_item(
     action: Sel,
 ) -> Retained<NSMenuItem> {
     let item = new_item(mtm, title, Some(action));
-    // SAFETY: `target` is the app's handler, which outlives the menu that owns
-    // this item.
+    // SAFETY: target 是 app 的 handler，其生命周期长于持有该菜单项的菜单。
     unsafe {
         item.setTarget(Some(target));
     }
     item
 }
 
-/// Builds the menu. The status item keeps it alive.
+/// 构建菜单。它由状态栏项保活。
 pub fn build(
     mtm: MainThreadMarker,
     target: &AnyObject,

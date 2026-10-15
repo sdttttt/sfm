@@ -1,18 +1,17 @@
 use std::mem::MaybeUninit;
 use std::time::Instant;
 
-// `mach_host_self` is deprecated in favour of the `mach2` crate; a third
-// dependency is not worth one port lookup.
+// 官方推荐用 `mach2` crate 替代已废弃的 `mach_host_self`；但仅为一次端口
+// 查询就引入第三个依赖并不划算。
 #[allow(deprecated)]
 use libc::mach_host_self;
 use libc::{host_statistics, HOST_CPU_LOAD_INFO};
 
-/// Samples closer together than this are dropped. Tick counters are coarse
-/// enough that a few-millisecond window can report 100%, which would make the
-/// menu bar jump on 「立即刷新」.
+/// 间隔小于此值的采样会被丢弃。tick 计数粒度较粗，几个毫秒的窗口就可能报出
+/// 100%，那会让点「立即刷新」时菜单栏的数字乱跳。
 const MIN_SAMPLE_SECS: f64 = 0.2;
 
-/// Tick counts reported by the kernel, ordered `[user, system, idle, nice]`.
+/// 内核上报的 tick 计数，顺序为 `[user, system, idle, nice]`。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ticks([u64; 4]);
 
@@ -23,7 +22,7 @@ impl Ticks {
     }
 }
 
-/// Computes CPU load from two tick samples, or `None` if they are unusable.
+/// 由两次 tick 采样计算 CPU 负载；数据不可用时返回 `None`。
 fn utilization(prev: Ticks, curr: Ticks) -> Option<f64> {
     let delta = [
         curr.0[0].checked_sub(prev.0[0])?,
@@ -41,8 +40,8 @@ fn utilization(prev: Ticks, curr: Ticks) -> Option<f64> {
 
 #[allow(deprecated)]
 fn read_ticks() -> Option<Ticks> {
-    // SAFETY: `HOST_CPU_LOAD_INFO` fills exactly `HOST_CPU_LOAD_INFO_COUNT`
-    // integers; the buffer is sized for that and passed with its real count.
+    // SAFETY: `HOST_CPU_LOAD_INFO` 恰好会填满 `HOST_CPU_LOAD_INFO_COUNT` 个
+    // 整数；缓冲区按该大小分配，并传入其真实长度。
     unsafe {
         let mut info =
             MaybeUninit::<[libc::integer_t; libc::HOST_CPU_LOAD_INFO_COUNT as usize]>::uninit();
@@ -70,8 +69,7 @@ fn read_ticks() -> Option<Ticks> {
     }
 }
 
-/// Keeps the previous tick baseline so each call can report the load since the
-/// last one.
+/// 保存上一次的 tick 基线，使每次调用都能报告「自上次调用以来」的负载。
 pub struct CpuSampler {
     prev: Option<Ticks>,
     last_at: Option<Instant>,
@@ -91,9 +89,8 @@ impl CpuSampler {
         }
     }
 
-    /// Returns the load measured since the previous call, or `None` when there
-    /// is no usable measurement (first frame, kernel failure, or a gap so wide
-    /// that the machine was asleep or the process was suspended).
+    /// 返回自上次调用以来测得的负载；当没有可用测量时返回 `None`
+    ///（首帧、内核读取失败，或间隔长到足以说明机器曾休眠、进程曾被挂起）。
     pub fn sample(&mut self, refresh_secs: u64) -> Option<f64> {
         let now = Instant::now();
         let elapsed = self
@@ -105,24 +102,23 @@ impl CpuSampler {
 
     fn advance(&mut self, refresh_secs: u64, ticks: Option<Ticks>, elapsed: f64) -> Option<f64> {
         let Some(ticks) = ticks else {
-            // Keep the previous baseline: a dropped frame should not poison the
-            // next measurement.
+            // 保留原基线：丢掉一帧不该污染下一次测量。
             return None;
         };
         let Some(prev) = self.prev else {
-            // First frame: remember the baseline and wait for the next one.
+            // 首帧：只记住基线，等下一帧再来比较。
             self.prev = Some(ticks);
             self.last_at = Some(Instant::now());
             return None;
         };
         if elapsed < MIN_SAMPLE_SECS {
-            // Too soon to measure anything meaningful. Keep the baseline so the
-            // next tick measures a full window.
+            // 间隔太短，测不出有意义的结果。保留基线，让下一个 tick 仍能测量
+            // 一个完整窗口。
             return None;
         }
         if elapsed > 3.0 * refresh_secs as f64 {
-            // Sleep/wake or a long debugger pause: the tick delta is meaningless,
-            // but the frame we just read becomes the new baseline.
+            // 休眠/唤醒，或调试器长时间暂停：此时 tick 差值毫无意义，但刚读到
+            // 的这一帧可以作为新基线。
             self.prev = Some(ticks);
             self.last_at = Some(Instant::now());
             return None;
@@ -145,7 +141,7 @@ mod tests {
 
     #[test]
     fn utilization_matches_hand_computation() {
-        // 1000 busy ticks out of 4000 total => 25%.
+        // 4000 tick 中有 1000 个是忙 => 25%。
         let prev = Ticks::new([0, 0, 0, 0]);
         let curr = Ticks::new([500, 400, 3000, 100]);
         let load = utilization(prev, curr).unwrap();
@@ -175,13 +171,13 @@ mod tests {
     fn long_gap_resets_baseline_instead_of_spiking() {
         let mut sampler = CpuSampler::new();
         sampler.advance(1, Some(Ticks::new([0, 0, 0, 0])), 0.0);
-        // Woke from sleep after minutes: this frame must be discarded.
+        // 休眠数分钟后醒来：这一帧必须被丢弃。
         assert_eq!(
             sampler.advance(1, Some(Ticks::new([900, 0, 100, 0])), 600.0),
             None
         );
-        // The discarded frame became the new baseline, so the next frame is a
-        // normal delta again: 100 busy ticks out of 2000 total.
+        // 被丢弃的那一帧成了新基线，于是下一帧又是正常的差值：2000 tick 中
+        // 有 100 个是忙。
         let load = sampler
             .advance(1, Some(Ticks::new([1000, 0, 2000, 0])), 1.0)
             .unwrap();
@@ -192,7 +188,7 @@ mod tests {
     fn long_gap_is_relative_to_refresh_interval() {
         let mut sampler = CpuSampler::new();
         sampler.advance(5, Some(Ticks::new([0, 0, 0, 0])), 0.0);
-        // 10s is only 2x a 5s interval, so the frame is kept.
+        // 10 秒仅为 5 秒间隔的 2 倍，因此这一帧予以保留。
         let load = sampler
             .advance(5, Some(Ticks::new([100, 0, 900, 0])), 10.0)
             .unwrap();
@@ -206,13 +202,13 @@ mod tests {
         let load = sampler
             .advance(1, Some(Ticks::new([100, 0, 900, 0])), 1.0)
             .unwrap();
-        // 「立即刷新」a few milliseconds later must not report 100%.
+        // 几毫秒后点「立即刷新」不应报出 100%。
         assert_eq!(
             sampler.advance(1, Some(Ticks::new([200, 0, 1000, 0])), 0.01),
             None
         );
-        // And the baseline is untouched, so the next timer tick measures the
-        // full window from [100, 0, 900] to [300, 0, 1900]: 200 of 1200 ticks.
+        // 而且基线未被改动，因此下一个定时器 tick 测的是从
+        // [100, 0, 900] 到 [300, 0, 1900] 的完整窗口：1200 tick 中有 200 个是忙。
         let load2 = sampler
             .advance(1, Some(Ticks::new([300, 0, 1900, 0])), 1.0)
             .unwrap();

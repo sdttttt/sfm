@@ -6,8 +6,7 @@
 	<string>zh_CN</string>
 	<key>CFBundleExecutable</key>
 	<string>sfm</string>
-	<!-- Required: without an identifier the process runs but never gets a
-	     status bar item. -->
+	<!-- 必填：缺少 identifier 时进程虽能运行，但永远拿不到状态栏项。 -->
 	<key>CFBundleIdentifier</key>
 	<string>com.kms.sfm</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -22,7 +21,7 @@
 	<string>0.1.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>11.0</string>
-	<!-- Menu bar only: no Dock icon, no app menu. -->
+	<!-- 仅菜单栏：不显示 Dock 图标，也不显示 app 菜单。 -->
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHighResolutionCapable</key>
