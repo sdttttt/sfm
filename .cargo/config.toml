@@ -1,0 +1,5 @@
+# cargo 自带的别名机制，用来固化本项目的打包命令，无需额外工具。
+[alias]
+# `cargo bundle` 默认还会尝试产出 .dmg（需要 hdiutil 挂载磁盘镜像），而菜单栏
+# 工具只需要 .app，这里用 --format osx 限定住，省掉无谓的磁盘镜像。
+app = "bundle --release --format osx"

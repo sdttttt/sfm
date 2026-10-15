@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  登录项模板：让 Sfm 从下次登录开始就在后台运行，只驻留菜单栏。
+
+  使用前先把 bundle 移到稳定位置 —— target/ 会被 cargo clean 清掉：
+
+      rm -rf ~/Applications/Sfm.app
+      mkdir -p ~/Applications
+      cp -R target/release/bundle/osx/Sfm.app ~/Applications/
+
+  然后安装并启用：
+
+      cp packaging/macos/com.kms.sfm.launchagent.plist \
+         ~/Library/LaunchAgents/com.kms.sfm.plist
+      plutil -lint ~/Library/LaunchAgents/com.kms.sfm.plist
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kms.sfm.plist
+
+  卸载：
+
+      launchctl bootout gui/$(id -u)/com.kms.sfm
+      rm -f ~/Library/LaunchAgents/com.kms.sfm.plist
+
+  注意 ProgramArguments 必须指向 bundle 内的二进制：NSStatusItem 只有在进程
+  从真实 bundle 中运行时才能在菜单栏占到位。
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kms.sfm</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/REPLACE_ME/Applications/Sfm.app/Contents/MacOS/sfm</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <!-- 只在图形登录会话里启动，避免 SSH/后台会话跑出看不见的状态栏项。 -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>

@@ -1,0 +1,11 @@
+<!--
+  追加到 cargo-bundle 生成的 Info.plist 末尾（闭合 </dict> 之前）。
+
+  cargo-bundle 的 plist 键是硬编码的固定集，其中没有 LSUIElement，而菜单栏
+  应用必须靠它隐藏 Dock 图标，因此只能走 info_plist_exts 注入。
+
+  代码里另有一份等价实现（main.rs 的 setActivationPolicy(Accessory)），
+  两者冗余是有意的：即便 plist 生成逻辑变动，也不会漏掉这个行为。
+-->
+<key>LSUIElement</key>
+<true/>

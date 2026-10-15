@@ -45,3 +45,19 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
 lto = true
 strip = true
 opt-level = "z"
+
+[package.metadata.bundle]
+# cargo-bundle 负责把二进制组装成 Sfm.app，取代原先的 justfile。
+# `cargo bundle --release` → target/release/bundle/osx/Sfm.app
+name = "Sfm"
+identifier = "com.kms.sfm"
+version = "0.1.0"
+short_description = "菜单栏 CPU / 内存监控"
+
+[package.metadata.bundle.osx]
+# 与 Info.plist 里原先的 LSMinimumSystemVersion 一致：objc2-app-kit 0.3 要求 11.0。
+minimum_system_version = "11.0"
+# cargo-bundle 生成的 plist 键是固定集，没有 LSUIElement（菜单栏应用必须隐藏
+# Dock 图标）。info_plist_exts 会在它写完自己的键之后、闭合 </dict> 之前把
+# 这些文件的内容原样追加进去。
+info_plist_exts = ["packaging/macos/Info.plist-ext.plist"]
