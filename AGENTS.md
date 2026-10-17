@@ -4,7 +4,7 @@
 
 Sfm 是一个用 Rust 编写的小型 macOS 菜单栏 CPU / 内存监控应用，基于 AppKit 与 `objc2`。代码全部位于 `src/`：
 
-- `main.rs` —— 应用生命周期、`NSStatusItem`、dispatch 定时器与 `main()` 入口。
+- `main.rs` —— 应用生命周期、`NSStatusItem`、dispatch 定时器与 `main()` 入口。定时器依赖手写的 `dispatch_source_create` FFI（`dispatch2` 未包装它）；`App` 由 `Box::leak` 故意泄漏，其裸指针经 ivar 交给 `MenuHandler`，靠「永不释放 + 只在主线程」保证安全。改动定时器或 App 生命周期前先读这里。
 - `metrics/` —— 采样层。`mod.rs` 定义共享的 `Snapshot`；`cpu.rs`、`mem.rs` 存放平台读取逻辑。**所有对内核的裸 C FFI 调用必须收敛在本模块内**，且每处都要有 `// SAFETY:` 注释。
 - `format.rs` —— 文本格式化，含 `MemStyle`（内存显示风格）。纯字符串逻辑，可在无 GUI 环境下单测。
 - `menu.rs` —— 菜单项及 target/action 接线。
@@ -22,8 +22,14 @@ Sfm 是一个用 Rust 编写的小型 macOS 菜单栏 CPU / 内存监控应用�
 
 打包由 **cargo-bundle** 完成，`cargo app` 是 `.cargo/config.toml` 里的别名，等价于 `cargo bundle --release --format osx`。限定 `--format osx` 是为了跳过默认的 `.dmg` 步骤（菜单栏工具不需要磁盘镜像）。
 
-- `cargo app` —— release 构建并组装 `Sfm.app`（无需 ad-hoc 签名，链接器已自动附加）。
-- `cargo test` —— 运行单元测试。
+`cargo-bundle` **不是 dev-dependency**，`cargo app` 前必须已全局安装，否则报 `no such command: bundle`：
+
+```bash
+cargo install cargo-bundle
+```
+
+- `cargo app` —— release 构建并组装 `Sfm.app`。
+- `cargo test` —— 运行全部单元测试（默认 20 项，无需 GUI）。
 - `cargo clean` —— 清除构建产物（含 bundle）。
 
 直接 `cargo run` **无法工作**：`NSStatusItem` 只有在进程从真实 bundle 中运行时才会占用菜单栏槽位。因此调试与运行都要走 bundle 内的二进制：
@@ -46,11 +52,11 @@ pkill -x sfm                    # 停止（全局命令，无需 cd）
 
 ## 编码风格与命名约定
 
-采用标准 `rustfmt`（4 空格缩进，无自定义配置），并保持 clippy 无告警。模块用 `snake_case`，类型用 `PascalCase`，函数与变量用 `snake_case`，常量用 `SCREAMING_SNAKE_CASE`。保留文档注释（模块用 `//!`，公开项用 `///`）——现有文件注释充分，请解释**为什么**而非**做了什么**。
+采用标准 `rustfmt`（4 空格缩进，无自定义配置），并保持 clippy 无告警。仓库没有 CI，也没有 `rustfmt.toml`/`clippy.toml`，因此提交前手动跑 `cargo fmt` 与 `cargo clippy`。模块用 `snake_case`，类型用 `PascalCase`，函数与变量用 `snake_case`，常量用 `SCREAMING_SNAKE_CASE`。保留文档注释（模块用 `//!`，公开项用 `///`）——现有文件注释充分，请解释**为什么**而非**做了什么**。
 
 ## 测试规范
 
-测试以内联 `#[cfg(test)] mod tests` 的形式写在被测模块中（`format.rs`、`metrics/cpu.rs`）。用行为命名测试函数，例如 `first_frame_is_dropped`、`failed_read_keeps_previous_frame`。任何涉及采样或格式化的改动都必须保持 `cargo test` 通过，并为新增边界补测试；若改动了菜单接线，还需同步扩展 `--selftest`。
+测试以内联 `#[cfg(test)] mod tests` 的形式写在被测模块中（`format.rs`、`metrics/cpu.rs`）。用行为命名测试函数，例如 `first_frame_is_dropped`、`failed_read_keeps_previous_frame`。跑单个测试用 `cargo test <test_name>`（如 `cargo test first_frame_is_dropped`）。任何涉及采样或格式化的改动都必须保持 `cargo test` 通过，并为新增边界补测试；若改动了菜单接线，还需同步扩展 `--selftest`。
 
 ## 提交与 Pull Request 规范
 
