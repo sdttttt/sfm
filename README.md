@@ -14,7 +14,7 @@ CPU= 13% MEM= 67%           ← 切到百分比风格后
 - **内存两种显示风格**随时切换：占总内存百分比（默认，`67%`）或具体占用大小（`10.7G`）
 - **刷新间隔** 1 / 2 / 5 秒可调
 - 设置（间隔、显示风格）持久化，重启后保留
-- 约 1300 行代码（含测试），20 项单元测试
+- 约 1100 行代码（含测试），14 项单元测试
 
 ## 构建
 
@@ -58,11 +58,11 @@ pkill -x sfm         # 停止
 ## 测试
 
 ```bash
-cargo test              # 20 项单元测试，无需 GUI
+cargo test              # 14 项单元测试，无需 GUI
 ```
 
-覆盖 CPU 利用率计算（含休眠唤醒、时间间隔过密、读取失败回退）、字节格式化边界、
-百分比钳制与除零保护、内存风格持久化往返。
+覆盖字节格式化边界、百分比钳制与除零保护、内存风格持久化往返，外加 sysinfo 采样
+输出的合理性冒烟测试。
 
 UI 接线（菜单 action、勾选状态、状态栏标题是否真的送达 AppKit）无法靠单元测试
 覆盖，用 `--selftest` 实跑验证：
@@ -101,26 +101,26 @@ rm -f ~/Library/LaunchAgents/com.kms.sfm.plist
 
 ## 工作原理
 
-单线程、单主队列 —— 采样只是微秒级的内核读取，用主队列定时器比「采样线程 + 跨线程
+单线程、单主队列 —— 采样只是微秒级的读取，用主队列定时器比「采样线程 + 跨线程
 数据搬运」更简单。`NSApplication.run()` 阻塞在事件循环里，定时器到期和菜单点击都
 由 AppKit 回调进 Rust。
 
+指标读取全部交给 [`sysinfo`](https://crates.io/crates/sysinfo)：
+
 | 指标 | 来源 |
 |---|---|
-| CPU | `host_statistics(HOST_CPU_LOAD_INFO)` 的 tick 计数**差值**，`busy = user + system + nice` |
-| 已用内存 | `(active + wired + compressed) × page_size` |
-| 总内存 | `sysctlbyname("hw.memsize")` |
-| Swap | `sysctlbyname("vm.swapusage")` |
+| CPU | `System::global_cpu_usage()`（全核平均，`nice` 计入忙） |
+| 已用内存 | `System::used_memory()`（macOS 上为 internal − purgeable + wired + compressed） |
+| 总内存 | `System::total_memory()` |
+| Swap | `System::used_swap()` |
 
 几个不显然的处理：
 
-- **CPU 用差值而非累计值**，`nice` 计入忙；差值用 `checked_sub` 防计数器回绕
-- **压缩内存必须计入**，漏掉会少报好几个 GB
-- **首帧丢弃**（没有上一次采样就无法算差值）
-- **间隔 < 0.2s 的采样丢弃**：tick 粒度粗，几个毫秒的窗口会误报 100%
-- **间隔 > 3 倍刷新周期视为休眠**：重置基线而非让菜单栏蹦出一个尖峰
-- **采样失败保留旧值**，而不是归零 —— 归零看起来像「机器突然空闲了」
+- **CPU 首次采样为 0%**：占用率靠两次刷新的差值算，`sysinfo` 首次没有基线
+- **点「立即刷新」时数字可能不变**：`sysinfo` 的 `MINIMUM_CPU_UPDATE_INTERVAL` 会
+  节流，间隔不足 200ms 时沿用它上一次算出的值
 - **百分比右对齐 3 字符** + 等宽数字字体：`9%→10%`、`99%→100%` 时后面的数字不抖动
+- **菜单里始终同时给出内存已用量与总量**，不受状态栏显示风格影响
 
 ## 环境
 

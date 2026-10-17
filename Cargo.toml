@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 dispatch2 = "0.3.1"
-libc = "0.2.190"
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
@@ -40,6 +39,9 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSValue",
     "NSZone",
 ] }
+# 采样全部经 sysinfo 完成。只用 system 特性，否则默认会拖进 disk/network/
+# component/user，而菜单栏只关心 CPU 与内存。
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 [profile.release]
 lto = true

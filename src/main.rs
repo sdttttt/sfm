@@ -30,7 +30,7 @@ use objc2_foundation::{
     NSAttributedString, NSAttributedStringKey, NSDictionary, NSMutableDictionary, NSString,
 };
 
-use metrics::{CpuSampler, Snapshot};
+use metrics::{Sampler, Snapshot};
 
 const NANOS_PER_SEC: u64 = 1_000_000_000;
 
@@ -95,7 +95,7 @@ fn attributed(text: &str, font: &NSFont, color: Option<&NSColor>) -> Retained<NS
 }
 
 struct App {
-    cpu: CpuSampler,
+    sampler: Sampler,
     snapshot: Snapshot,
     interval_secs: u64,
     mem_style: format::MemStyle,
@@ -113,21 +113,9 @@ struct App {
 }
 
 impl App {
-    /// 采样全部指标，并重写状态栏项与那三行明细。某项采样失败时保留旧值，
-    /// 而不是归零 —— 归零看起来会像「机器突然空闲了」。
+    /// 采样全部指标，并重写状态栏项与那三行明细。
     fn refresh(&mut self) {
-        if let Some(cpu) = self.cpu.sample(self.interval_secs) {
-            self.snapshot.cpu = cpu;
-        }
-        if let Some(used) = metrics::memory_used() {
-            self.snapshot.mem_used = used;
-        }
-        if let Some(total) = metrics::total_memory() {
-            self.snapshot.mem_total = total;
-        }
-        if let Some(swap) = metrics::swap_used() {
-            self.snapshot.swap_used = swap;
-        }
+        self.snapshot = self.sampler.refresh();
 
         let title = attributed(
             &format::status_title(
@@ -358,7 +346,7 @@ fn main() {
     let secondary = NSColor::secondaryLabelColor();
 
     let app_ptr: *mut App = Box::into_raw(Box::new(App {
-        cpu: CpuSampler::new(),
+        sampler: Sampler::new(),
         snapshot: Snapshot {
             cpu: 0.0,
             mem_used: 0,
@@ -393,7 +381,8 @@ fn main() {
         return;
     }
 
-    // 先采样一次，让第一帧就带上真实数据，之后再把 app 交给 AppKit。
+    // 先采样一次，让内存第一帧就带上真实数据（CPU 要两次刷新才有值），
+    // 之后再把 app 交给 AppKit。
     app.refresh();
     // SAFETY: 该 context 只会被主队列上的 `on_tick` 读取。
     unsafe {
