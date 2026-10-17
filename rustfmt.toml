@@ -1,0 +1,7 @@
+# stable 工具链上的 rustfmt 只识别稳定配置项，因此这里只固化项目既有风格：
+# 运行 `cargo fmt` 之后，`cargo fmt --check` 必须保持零 diff。
+# 更激进的排版选项（imports_granularity、wrap_comments 等）需要 nightly，刻意不用。
+edition = "2021"
+max_width = 100
+tab_spaces = 4
+newline_style = "Unix"

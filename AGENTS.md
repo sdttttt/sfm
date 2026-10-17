@@ -52,7 +52,7 @@ pkill -x sfm                    # 停止（全局命令，无需 cd）
 
 ## 编码风格与命名约定
 
-采用标准 `rustfmt`（4 空格缩进，无自定义配置），并保持 clippy 无告警。仓库没有 CI，也没有 `rustfmt.toml`/`clippy.toml`，因此提交前手动跑 `cargo fmt` 与 `cargo clippy`。模块用 `snake_case`，类型用 `PascalCase`，函数与变量用 `snake_case`，常量用 `SCREAMING_SNAKE_CASE`。保留文档注释（模块用 `//!`，公开项用 `///`）——现有文件注释充分，请解释**为什么**而非**做了什么**。
+格式化与 lint 规则固化在 `rustfmt.toml`（只用 stable 选项：4 空格缩进、宽度 100）与 `Cargo.toml` 的 `[lints]`（`undocumented_unsafe_blocks` 会把缺失的 `// SAFETY:` 报出来）。仓库没有 CI，因此提交前手动跑 `cargo fmt` 与 `cargo clippy --all-targets --all-features -- -D warnings`。模块用 `snake_case`，类型用 `PascalCase`，函数与变量用 `snake_case`，常量用 `SCREAMING_SNAKE_CASE`。保留文档注释（模块用 `//!`，公开项用 `///`）——现有文件注释充分，请解释**为什么**而非**做了什么**。
 
 ## 测试规范
 

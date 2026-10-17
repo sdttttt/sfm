@@ -46,6 +46,15 @@ lto = true
 strip = true
 opt-level = "z"
 
+[lints.rust]
+# 若将来新增 unsafe fn，其函数体内部的危险操作也必须显式包在 unsafe 块里。
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+# 项目约定：每个 unsafe 块都要带 `// SAFETY:` 说明前提（见 AGENTS.md）。
+# 交给 clippy 机器强制，避免新增 FFI 调用时漏写。
+undocumented_unsafe_blocks = "warn"
+
 [package.metadata.bundle]
 # cargo-bundle 负责把二进制组装成 Sfm.app，取代原先的 justfile。
 # `cargo bundle --release` → target/release/bundle/osx/Sfm.app
