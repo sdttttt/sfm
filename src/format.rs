@@ -57,6 +57,15 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// 输出形如 ` 340K` 的速率字段（右对齐到 5 字符宽）。
+///
+/// 档位与 [`format_bytes`] 一致 —— 秒级窗口里 0.1M 的精度同样是噪声。多出来的
+/// 填充让 ↓/↑ 两个速率字段的起止位置不随读数跳动，与百分比 `{">3}` 是同一个
+/// 防抖思路；左侧填充还顺带充当了箭头与数字之间的间隔。
+pub fn format_rate(bytes_per_sec: u64) -> String {
+    format!("{:>5}", format_bytes(bytes_per_sec))
+}
+
 /// 把 `0.0..=1.0` 的负载四舍五入为状态栏所显示的整数百分比。
 pub fn percent(cpu: f64) -> u32 {
     if !cpu.is_finite() || cpu <= 0.0 {
@@ -82,12 +91,26 @@ pub fn mem_percent(used: u64, total: u64) -> u32 {
 ///
 /// 两个百分比字段都右对齐到 3 字符宽，这样 CPU 从 9% 变到 10%、或从 99% 变到
 /// 100% 时，后面的内容不会左右抖动；百分比风格下两个字段的宽度也都是固定的。
-pub fn status_title(cpu: f64, mem_used: u64, mem_total: u64, style: MemStyle) -> String {
+///
+/// `net` 为 `Some((下行, 上行))` 时在末尾追加 `" ↓ 340K ↑1.2M"` 形式的网速段
+/// （字节/秒）。`None` 时输出与不带网速的旧版标题完全一致。
+pub fn status_title(
+    cpu: f64,
+    mem_used: u64,
+    mem_total: u64,
+    style: MemStyle,
+    net: Option<(u64, u64)>,
+) -> String {
     let mem = match style {
         MemStyle::Size => format_bytes(mem_used),
         MemStyle::Percent => format!("{:>3}%", mem_percent(mem_used, mem_total)),
     };
-    format!("CPU={:>3}% MEM={}", percent(cpu), mem)
+    let base = format!("CPU={:>3}% MEM={}", percent(cpu), mem);
+    match net {
+        None => base,
+        // format_rate 自带的左侧填充正好充当箭头与数字之间的间隔。
+        Some((rx, tx)) => format!("{} ↓{} ↑{}", base, format_rate(rx), format_rate(tx)),
+    }
 }
 
 /// 输出形如 `"CPU 12%"`。
@@ -106,6 +129,14 @@ pub fn mem_row(used: u64, total: u64) -> String {
 /// 输出形如 `"Swap 1.2G"`。
 pub fn swap_row(used: u64) -> String {
     format!("Swap {}", format_bytes(used))
+}
+
+/// 输出形如 `"网速 ↓ 340K/s ↑1.2M/s"`。
+///
+/// 与标题的网速段共用同一套定宽字段，菜单里只是多了 `/s` 后缀把「这是速率」
+/// 说破。
+pub fn net_row(rx: u64, tx: u64) -> String {
+    format!("网速 ↓{}/s ↑{}/s", format_rate(rx), format_rate(tx))
 }
 
 #[cfg(test)]
@@ -131,6 +162,15 @@ mod tests {
     fn byte_formatting_matches_activity_monitor_style() {
         assert_eq!(format_bytes(9 * G + 200 * MIB), "9.2G");
         assert_eq!(format_bytes(512 * MIB), "512M");
+    }
+
+    #[test]
+    fn rate_formatting_matches_byte_tiers_and_stays_five_wide() {
+        assert_eq!(format_rate(0), "   0K");
+        assert_eq!(format_rate(340 * KIB), " 340K");
+        assert_eq!(format_rate(MIB), "   1M");
+        assert_eq!(format_rate(1023 * MIB), "1023M");
+        assert_eq!(format_rate(GIB + 200 * MIB), " 1.2G");
     }
 
     #[test]
@@ -181,12 +221,15 @@ mod tests {
     #[test]
     fn title_content() {
         assert_eq!(
-            status_title(0.12, 8 * G + 4 * MIB, 16 * G, MemStyle::Size),
+            status_title(0.12, 8 * G + 4 * MIB, 16 * G, MemStyle::Size, None),
             "CPU= 12% MEM=8.0G"
         );
-        assert_eq!(status_title(0.004, 0, 0, MemStyle::Size), "CPU=  0% MEM=0K");
         assert_eq!(
-            status_title(1.0, 16 * G, 16 * G, MemStyle::Size),
+            status_title(0.004, 0, 0, MemStyle::Size, None),
+            "CPU=  0% MEM=0K"
+        );
+        assert_eq!(
+            status_title(1.0, 16 * G, 16 * G, MemStyle::Size, None),
             "CPU=100% MEM=16.0G"
         );
     }
@@ -194,13 +237,27 @@ mod tests {
     #[test]
     fn title_percent_style() {
         assert_eq!(
-            status_title(0.11, 8 * G + 4 * MIB, 16 * G, MemStyle::Percent),
+            status_title(0.11, 8 * G + 4 * MIB, 16 * G, MemStyle::Percent, None),
             "CPU= 11% MEM= 50%"
         );
         // 总量读不到时退化为 0%，而不是除以零。
         assert_eq!(
-            status_title(0.5, 4 * G, 0, MemStyle::Percent),
+            status_title(0.5, 4 * G, 0, MemStyle::Percent, None),
             "CPU= 50% MEM=  0%"
+        );
+    }
+
+    #[test]
+    fn title_appends_net_segment() {
+        assert_eq!(
+            status_title(
+                0.11,
+                8 * G,
+                16 * G,
+                MemStyle::Percent,
+                Some((340 * KIB, 2 * GIB))
+            ),
+            "CPU= 11% MEM= 50% ↓ 340K ↑ 2.0G"
         );
     }
 
@@ -209,7 +266,7 @@ mod tests {
         // 大小风格：CPU 位数变化时后缀位置不动。
         let sizes = [0.4f64, 9.6, 99.5, 1.0]
             .iter()
-            .map(|cpu| status_title(*cpu, 8 * G + 4 * MIB, 16 * G, MemStyle::Size).len())
+            .map(|cpu| status_title(*cpu, 8 * G + 4 * MIB, 16 * G, MemStyle::Size, None).len())
             .collect::<Vec<_>>();
         assert!(sizes.windows(2).all(|w| w[0] == w[1]), "{sizes:?}");
 
@@ -218,10 +275,24 @@ mod tests {
             .iter()
             .map(|cpu| {
                 let used = (*cpu * 0.5 * 16.0 * G as f64) as u64;
-                status_title(*cpu, used, 16 * G, MemStyle::Percent).len()
+                status_title(*cpu, used, 16 * G, MemStyle::Percent, None).len()
             })
             .collect::<Vec<_>>();
         assert!(pcts.windows(2).all(|w| w[0] == w[1]), "{pcts:?}");
+    }
+
+    #[test]
+    fn title_width_is_stable_across_rates() {
+        // 网速段两个速率字段都是定宽，速率跳动时标题长度恒定 —— 空闲时的
+        // `0K` 与满速时的 `1023M` 占位完全一样。
+        let rates = [0, 512, 340 * KIB, 512 * MIB, 1023 * MIB, 2 * GIB];
+        let widths = rates
+            .iter()
+            .map(|&rate| {
+                status_title(0.11, 8 * G, 16 * G, MemStyle::Percent, Some((rate, 0))).len()
+            })
+            .collect::<Vec<_>>();
+        assert!(widths.windows(2).all(|w| w[0] == w[1]), "{widths:?}");
     }
 
     #[test]
@@ -230,6 +301,7 @@ mod tests {
         assert_eq!(mem_row(8 * G + 4 * MIB, 16 * G), "内存 8.0G / 16.0G");
         assert_eq!(swap_row(0), "Swap 0K");
         assert_eq!(swap_row(GIB + MIB * 200), "Swap 1.2G");
+        assert_eq!(net_row(340 * KIB, 0), "网速 ↓ 340K/s ↑   0K/s");
     }
 
     #[test]
@@ -239,17 +311,32 @@ mod tests {
             mem_used: 2 * G,
             mem_total: 8 * G,
             swap_used: MIB,
+            net_rx: 340 * KIB,
+            net_tx: 1023 * MIB,
         };
         assert_eq!(cpu_row(snap.cpu), "CPU 50%");
         assert_eq!(mem_row(snap.mem_used, snap.mem_total), "内存 2.0G / 8.0G");
         assert_eq!(swap_row(snap.swap_used), "Swap 1M");
+        assert_eq!(net_row(snap.net_rx, snap.net_tx), "网速 ↓ 340K/s ↑1023M/s");
         assert_eq!(
-            status_title(snap.cpu, snap.mem_used, snap.mem_total, MemStyle::Size),
+            status_title(
+                snap.cpu,
+                snap.mem_used,
+                snap.mem_total,
+                MemStyle::Size,
+                None
+            ),
             "CPU= 50% MEM=2.0G"
         );
         assert_eq!(
-            status_title(snap.cpu, snap.mem_used, snap.mem_total, MemStyle::Percent),
-            "CPU= 50% MEM= 25%"
+            status_title(
+                snap.cpu,
+                snap.mem_used,
+                snap.mem_total,
+                MemStyle::Percent,
+                Some((snap.net_rx, snap.net_tx)),
+            ),
+            "CPU= 50% MEM= 25% ↓ 340K ↑1023M"
         );
     }
 }

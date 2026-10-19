@@ -2,13 +2,13 @@
 
 ## 项目结构与模块组织
 
-Sfm 是一个用 Rust 编写的小型 macOS 菜单栏 CPU / 内存监控应用，基于 AppKit 与 `objc2`。代码全部位于 `src/`：
+Sfm 是一个用 Rust 编写的小型 macOS 菜单栏 CPU / 内存 / 网速监控应用，基于 AppKit 与 `objc2`。代码全部位于 `src/`：
 
 - `main.rs` —— 应用生命周期、`NSStatusItem`、dispatch 定时器与 `main()` 入口。定时器依赖手写的 `dispatch_source_create` FFI（`dispatch2` 未包装它）；`App` 由 `Box::leak` 故意泄漏，其裸指针经 ivar 交给 `MenuHandler`，靠「永不释放 + 只在主线程」保证安全。改动定时器或 App 生命周期前先读这里。
-- `metrics/` —— 采样层，统一走 `sysinfo`。`mod.rs` 定义 `Snapshot` 与持有唯一 `System` 的 `Sampler`；`cpu.rs`、`mem.rs` 分别封装 CPU 与内存/交换的读取。平台相关的细节都收敛在本模块内，上层只见 `Snapshot`。
+- `metrics/` —— 采样层，统一走 `sysinfo`。`mod.rs` 定义 `Snapshot` 与同时持有 `System`、`Networks` 的 `Sampler`（网速速率 = 两次刷新的字节差 ÷ 真实间隔，`Instant` 记在 `Sampler` 里）；`cpu.rs`、`mem.rs`、`net.rs` 分别封装 CPU、内存/交换、网络接口的读取。平台相关的细节都收敛在本模块内，上层只见 `Snapshot`。
 - `format.rs` —— 文本格式化，含 `MemStyle`（内存显示风格）。纯字符串逻辑，可在无 GUI 环境下单测。
-- `menu.rs` —— 菜单项及 target/action 接线。
-- `prefs.rs` —— 通过 `NSUserDefaults` 持久化刷新间隔与内存显示风格。
+- `menu.rs` —— 菜单项及 target/action 接线。「端口范围」的接口名是运行时数据，各项共用 `toggleNetIface:` 一个 selector，靠菜单项 tag（= `MenuParts.net_ifaces` 下标）反查接口。
+- `prefs.rs` —— 通过 `NSUserDefaults` 持久化刷新间隔、内存显示风格、网速开关与端口范围勾选集合。
 
 打包相关文件：
 
@@ -29,7 +29,7 @@ cargo install cargo-bundle
 ```
 
 - `cargo app` —— release 构建并组装 `Sfm.app`。
-- `cargo test` —— 运行全部单元测试（默认 14 项，无需 GUI）。
+- `cargo test` —— 运行全部单元测试（默认 22 项，无需 GUI）。
 - `cargo clean` —— 清除构建产物（含 bundle）。
 
 直接 `cargo run` **无法工作**：`NSStatusItem` 只有在进程从真实 bundle 中运行时才会占用菜单栏槽位。因此调试与运行都要走 bundle 内的二进制：
@@ -64,4 +64,4 @@ pkill -x sfm                    # 停止（全局命令，无需 cd）
 
 ## Agent 专属注意事项
 
-切勿提交 `/target`。除非确有需要，不要新增 `objc2` feature——`Cargo.toml` 中的 feature 列表是刻意精简的。`sysinfo` 必须保持 `default-features = false` 且只开 `system`，否则会拖进 disk/network/component/user。改动 `[package.metadata.bundle]` 后需实跑 `--selftest` 确认状态栏项仍然出现（`status item visible: true`），因为 `LSUIElement` 之类影响 GUI 行为的键无法靠单元测试覆盖。
+切勿提交 `/target`。除非确有需要，不要新增 `objc2` feature——`Cargo.toml` 中的 feature 列表是刻意精简的。`sysinfo` 必须保持 `default-features = false` 且只开 `system` + `network`（network 供网速采样），否则默认会拖进 disk/component/user。改动 `[package.metadata.bundle]` 后需实跑 `--selftest` 确认状态栏项仍然出现（`status item visible: true`），因为 `LSUIElement` 之类影响 GUI 行为的键无法靠单元测试覆盖。

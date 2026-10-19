@@ -8,6 +8,8 @@ use crate::format::MemStyle;
 
 const KEY_REFRESH_SECS: &str = "refresh_secs";
 const KEY_MEM_STYLE: &str = "mem_style";
+const KEY_NET_SHOWN: &str = "net_shown";
+const KEY_NET_IFACES: &str = "net_ifaces";
 
 /// 界面提供的全部刷新间隔。
 pub const INTERVALS: [u64; 3] = [1, 2, 5];
@@ -56,6 +58,53 @@ pub fn set_mem_style(style: MemStyle) {
     let value: Retained<NSNumber> = NSNumber::numberWithUnsignedLongLong(style.index());
     // SAFETY: value 是 `NSNumber`、key 是 `NSString`，正是 `-setObject:forKey:`
     // 所要求的类型。
+    unsafe { defaults.setObject_forKey(Some(&*value as &AnyObject), &key) };
+}
+
+/// 返回网速是否显示；键缺失（首次启动）默认显示。
+pub fn net_shown() -> bool {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let key = NSString::from_str(KEY_NET_SHOWN);
+    // `integerForKey` 对缺失键返回 0，与「用户明确关掉」无法区分，而这里的
+    // 默认值是「显示」，因此用 `objectForKey` 判存在性而不是读数值。
+    match defaults.objectForKey(&key) {
+        None => true,
+        Some(_) => defaults.integerForKey(&key) != 0,
+    }
+}
+
+pub fn set_net_shown(shown: bool) {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let key = NSString::from_str(KEY_NET_SHOWN);
+    let value: Retained<NSNumber> = NSNumber::numberWithUnsignedLongLong(u64::from(shown));
+    // SAFETY: value 是 `NSNumber`、key 是 `NSString`，正是 `-setObject:forKey:`
+    // 所要求的类型。
+    unsafe { defaults.setObject_forKey(Some(&*value as &AnyObject), &key) };
+}
+
+/// 返回持久化的「端口范围」勾选集合；键缺失（首次启动）时返回 `None`，
+/// 由调用方套用「勾选全部 en*」的默认规则。
+///
+/// 存储格式是逗号拼接的接口名（如 `en0,en5`）：接口名不含逗号，天然可逆。
+/// 集合里残留已消失的接口名无害 —— 接口可能重现，因此读取时不做修剪。
+pub fn net_ifaces() -> Option<Vec<String>> {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let key = NSString::from_str(KEY_NET_IFACES);
+    let raw = defaults.stringForKey(&key)?;
+    let raw = raw.to_string();
+    if raw.is_empty() {
+        // 空串是「用户取消了全部勾选」，与键缺失是两种状态。
+        return Some(Vec::new());
+    }
+    Some(raw.split(',').map(str::to_string).collect())
+}
+
+pub fn set_net_ifaces(ifaces: &[String]) {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let key = NSString::from_str(KEY_NET_IFACES);
+    let value = NSString::from_str(&ifaces.join(","));
+    // SAFETY: value 是 `NSString`、key 也是 `NSString`，正是
+    // `-setObject:forKey:` 所要求的类型。
     unsafe { defaults.setObject_forKey(Some(&*value as &AnyObject), &key) };
 }
 

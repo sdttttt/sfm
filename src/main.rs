@@ -8,6 +8,7 @@ mod menu;
 mod metrics;
 mod prefs;
 
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
@@ -23,14 +24,14 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSColor, NSControlStateValueOff,
-    NSControlStateValueOn, NSFont, NSFontAttributeName, NSForegroundColorAttributeName,
+    NSControlStateValueOn, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSMenuItem,
     NSStatusBar, NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength,
 };
 use objc2_foundation::{
     NSAttributedString, NSAttributedStringKey, NSDictionary, NSMutableDictionary, NSString,
 };
 
-use metrics::{Sampler, Snapshot};
+use metrics::{is_default_enabled, Sampler, Snapshot};
 
 const NANOS_PER_SEC: u64 = 1_000_000_000;
 
@@ -99,6 +100,8 @@ struct App {
     snapshot: Snapshot,
     interval_secs: u64,
     mem_style: format::MemStyle,
+    /// 状态栏标题是否带网速段。
+    net_shown: bool,
     /// 仅为保活而持有：让 AppKit 不会释放状态栏项（以及本进程）。
     _status_item: Retained<NSStatusItem>,
     button: Retained<NSStatusBarButton>,
@@ -113,17 +116,14 @@ struct App {
 }
 
 impl App {
-    /// 采样全部指标，并重写状态栏项与那三行明细。
+    /// 采样全部指标，并重写状态栏项与那四行明细。
     fn refresh(&mut self) {
         self.snapshot = self.sampler.refresh();
+        let snap = self.snapshot;
+        let net = self.net_shown.then_some((snap.net_rx, snap.net_tx));
 
         let title = attributed(
-            &format::status_title(
-                self.snapshot.cpu,
-                self.snapshot.mem_used,
-                self.snapshot.mem_total,
-                self.mem_style,
-            ),
+            &format::status_title(snap.cpu, snap.mem_used, snap.mem_total, self.mem_style, net),
             &self.title_font,
             None,
         );
@@ -134,20 +134,15 @@ impl App {
         };
         if self.debug {
             eprintln!(
-                "sfm: {} | {} | {} | {}",
-                format::status_title(
-                    self.snapshot.cpu,
-                    self.snapshot.mem_used,
-                    self.snapshot.mem_total,
-                    self.mem_style,
-                ),
-                format::cpu_row(self.snapshot.cpu),
-                format::mem_row(self.snapshot.mem_used, self.snapshot.mem_total),
-                format::swap_row(self.snapshot.swap_used),
+                "sfm: {} | {} | {} | {} | {}",
+                format::status_title(snap.cpu, snap.mem_used, snap.mem_total, self.mem_style, net,),
+                format::cpu_row(snap.cpu),
+                format::mem_row(snap.mem_used, snap.mem_total),
+                format::swap_row(snap.swap_used),
+                format::net_row(snap.net_rx, snap.net_tx),
             );
         }
 
-        let snap = self.snapshot;
         let cpu_text = attributed(
             &format::cpu_row(snap.cpu),
             &self.info_font,
@@ -166,6 +161,12 @@ impl App {
             Some(&self.secondary),
         );
         parts.swap.setAttributedTitle(Some(&swap_text));
+        let net_text = attributed(
+            &format::net_row(snap.net_rx, snap.net_tx),
+            &self.info_font,
+            Some(&self.secondary),
+        );
+        parts.net.setAttributedTitle(Some(&net_text));
     }
 
     /// 原地修改刷新周期：复用同一个 timer source，因此改动立即生效，无需重启。
@@ -208,9 +209,65 @@ impl App {
         self.refresh();
     }
 
+    /// 切换状态栏里网速段的显示：立即重写标题、同步勾选并持久化。
+    fn set_net_shown(&mut self, shown: bool) {
+        if shown == self.net_shown {
+            return;
+        }
+        self.net_shown = shown;
+        prefs::set_net_shown(shown);
+        if let Some(parts) = self.parts.as_ref() {
+            for (item_shown, item) in &parts.net_shown {
+                item.setState(if *item_shown == shown {
+                    NSControlStateValueOn
+                } else {
+                    NSControlStateValueOff
+                });
+            }
+        }
+        self.refresh();
+    }
+
+    /// 翻转「端口范围」里某个接口的勾选：立即改变统计范围、同步勾选并持久化。
+    /// `index` 是菜单项的 tag，即 `parts.net_ifaces` 的下标。
+    fn toggle_net_iface(&mut self, index: usize) {
+        let Some(parts) = self.parts.as_ref() else {
+            return;
+        };
+        let Some((name, item)) = parts.net_ifaces.get(index) else {
+            return;
+        };
+        let name = name.clone();
+        // Retained 克隆一份，尽早结束对 parts 的借用，后面的 refresh 需要 &mut self。
+        let item = item.clone();
+
+        let was_on = self.sampler.net_ifaces().contains(&name);
+        let mut enabled = self.sampler.net_ifaces().clone();
+        if was_on {
+            enabled.remove(&name);
+        } else {
+            enabled.insert(name);
+        }
+        self.sampler.set_net_ifaces(enabled);
+        // 排序后落盘，键值在 defaults 编辑器里可读。
+        let mut sorted: Vec<String> = self.sampler.net_ifaces().iter().cloned().collect();
+        sorted.sort();
+        prefs::set_net_ifaces(&sorted);
+        item.setState(if was_on {
+            NSControlStateValueOff
+        } else {
+            NSControlStateValueOn
+        });
+        self.refresh();
+    }
+
     fn quit(&self) {
         prefs::set_refresh_secs(self.interval_secs);
         prefs::set_mem_style(self.mem_style);
+        prefs::set_net_shown(self.net_shown);
+        let mut ifaces: Vec<String> = self.sampler.net_ifaces().iter().cloned().collect();
+        ifaces.sort();
+        prefs::set_net_ifaces(&ifaces);
         prefs::synchronize();
         NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
             .terminate(None);
@@ -260,6 +317,30 @@ define_class!(
             self.app().set_mem_style(format::MemStyle::Percent);
         }
 
+        #[unsafe(method(setNetShownOn:))]
+        fn on_net_shown_on(&self, _sender: *mut AnyObject) {
+            self.app().set_net_shown(true);
+        }
+
+        #[unsafe(method(setNetShownOff:))]
+        fn on_net_shown_off(&self, _sender: *mut AnyObject) {
+            self.app().set_net_shown(false);
+        }
+
+        #[unsafe(method(toggleNetIface:))]
+        fn on_toggle_net_iface(&self, sender: *mut AnyObject) {
+            if sender.is_null() {
+                return;
+            }
+            // SAFETY: 该 selector 只挂在「端口范围」的接口项上，sender 一定是
+            // NSMenuItem，其 tag 即 parts.net_ifaces 中的下标。
+            let tag = unsafe { (&*sender.cast::<NSMenuItem>()).tag() };
+            if tag < 0 {
+                return;
+            }
+            self.app().toggle_net_iface(tag as usize);
+        }
+
         #[unsafe(method(quit:))]
         fn on_quit(&self, _sender: *mut AnyObject) {
             self.app().quit();
@@ -288,6 +369,15 @@ impl MenuHandler {
 
         #[unsafe(method(setMemStylePercent:))]
         fn set_mem_style_percent(&self, sender: &AnyObject);
+
+        #[unsafe(method(setNetShownOn:))]
+        fn set_net_shown_on(&self, sender: &AnyObject);
+
+        #[unsafe(method(setNetShownOff:))]
+        fn set_net_shown_off(&self, sender: &AnyObject);
+
+        #[unsafe(method(toggleNetIface:))]
+        fn toggle_net_iface(&self, sender: &AnyObject);
 
         #[unsafe(method(quit:))]
         fn quit_menu(&self, sender: &AnyObject);
@@ -335,6 +425,7 @@ fn main() {
 
     let interval_secs = prefs::refresh_secs();
     let mem_style = prefs::mem_style();
+    let net_shown = prefs::net_shown();
     let status_item =
         NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
     let button: Retained<NSStatusBarButton> = status_item
@@ -352,9 +443,12 @@ fn main() {
             mem_used: 0,
             mem_total: 0,
             swap_used: 0,
+            net_rx: 0,
+            net_tx: 0,
         },
         interval_secs,
         mem_style,
+        net_shown,
         _status_item: status_item.clone(),
         button: button.clone(),
         title_font,
@@ -365,12 +459,37 @@ fn main() {
         debug,
     }));
 
-    let handler = MenuHandler::new(app_ptr);
-    let parts = menu::build(mtm, &handler, &prefs::INTERVALS, interval_secs, mem_style);
-    let menu = parts.menu.clone();
     // SAFETY: `app_ptr` was just created and is not yet shared with the run
     // loop; the reference below is the only one that exists.
     let app = unsafe { &mut *app_ptr };
+    // 接口列表在启动时采集一次（「端口范围」子菜单的条目即来自这里），同时
+    // 这次刷新把各接口的字节基线归零。
+    let ifaces = app.sampler.net_interface_names();
+    let enabled: HashSet<String> = match prefs::net_ifaces() {
+        Some(stored) => stored.into_iter().collect(),
+        // 首次启动还没有持久化勾选：默认勾上全部物理网卡。
+        None => ifaces
+            .iter()
+            .filter(|name| is_default_enabled(name))
+            .cloned()
+            .collect(),
+    };
+    app.sampler.set_net_ifaces(enabled);
+
+    let handler = MenuHandler::new(app_ptr);
+    let parts = menu::build(
+        mtm,
+        &handler,
+        &prefs::INTERVALS,
+        interval_secs,
+        mem_style,
+        menu::NetMenuState {
+            shown: net_shown,
+            ifaces,
+            enabled: app.sampler.net_ifaces().clone(),
+        },
+    );
+    let menu = parts.menu.clone();
     app.parts = Some(parts);
 
     // 左右键点击都弹出这个菜单 —— 这是 AppKit 的默认行为。
@@ -399,18 +518,23 @@ fn main() {
 ///
 /// 用 `sfm --selftest` 运行：每一步打印一行，随后退出。
 fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
+    // 按当前显示设置渲染标题，免得每处 println 手工拼 status_title 的参数。
+    let title = |app: &App| {
+        let snap = app.snapshot;
+        let net = app.net_shown.then_some((snap.net_rx, snap.net_tx));
+        format::status_title(snap.cpu, snap.mem_used, snap.mem_total, app.mem_style, net)
+    };
+
     println!("interval loaded from prefs: {}", app.interval_secs);
+    println!("net shown loaded from prefs: {}", app.net_shown);
     println!("status item visible: {}", app._status_item.isVisible());
 
-    // 取相隔一秒的两帧，这样 CPU 数值才是真实测量结果。
+    // 取相隔一秒的两帧，这样 CPU 与网速数值才是真实测量结果。
     app.refresh();
     std::thread::sleep(std::time::Duration::from_millis(1200));
     app.refresh();
     let snap = app.snapshot;
-    println!(
-        "title: {}",
-        format::status_title(snap.cpu, snap.mem_used, snap.mem_total, app.mem_style)
-    );
+    println!("title: {}", title(app));
     // 把文本从真实的状态栏按钮里读回来，以此证明数值确实送达了 AppKit，
     // 而不只是在自己的格式化代码里转了一圈。
     println!(
@@ -420,6 +544,7 @@ fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
     println!("{}", format::cpu_row(snap.cpu));
     println!("{}", format::mem_row(snap.mem_used, snap.mem_total));
     println!("{}", format::swap_row(snap.swap_used));
+    println!("{}", format::net_row(snap.net_rx, snap.net_tx));
 
     let Some(parts) = app.parts.as_ref() else {
         panic!("menu was not installed");
@@ -427,15 +552,7 @@ fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
     let sender = parts.cpu.clone();
     // 下面这些正是 AppKit 在菜单项被点击时会发送的 selector。
     handler.refresh_now(&sender);
-    println!(
-        "after refreshNow: {}",
-        format::status_title(
-            app.snapshot.cpu,
-            app.snapshot.mem_used,
-            app.snapshot.mem_total,
-            app.mem_style,
-        )
-    );
+    println!("after refreshNow: {}", title(app));
 
     handler.set_interval_5(&sender);
     println!(
@@ -465,12 +582,7 @@ fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
     handler.set_mem_style_percent(&sender);
     println!(
         "after setMemStylePercent: title={} prefs={:?}",
-        format::status_title(
-            app.snapshot.cpu,
-            app.snapshot.mem_used,
-            app.snapshot.mem_total,
-            app.mem_style,
-        ),
+        title(app),
         prefs::mem_style()
     );
     for (style, item) in &app.parts.as_ref().unwrap().mem_styles {
@@ -484,16 +596,49 @@ fn selftest(app: &mut App, handler: &Retained<MenuHandler>) {
     handler.set_mem_style_size(&sender);
     println!(
         "after setMemStyleSize: title={} prefs={:?}",
-        format::status_title(
-            app.snapshot.cpu,
-            app.snapshot.mem_used,
-            app.snapshot.mem_total,
-            app.mem_style,
-        ),
+        title(app),
         prefs::mem_style()
     );
 
-    // 退出动作会先落盘刷新间隔，再请求 AppKit 终止进程。
+    handler.set_net_shown_off(&sender);
+    println!(
+        "after setNetShownOff: title={} prefs={}",
+        title(app),
+        prefs::net_shown()
+    );
+    handler.set_net_shown_on(&sender);
+    println!(
+        "after setNetShownOn: title={} prefs={}",
+        title(app),
+        prefs::net_shown()
+    );
+
+    let Some(parts) = app.parts.as_ref() else {
+        panic!("menu was not installed");
+    };
+    for (name, item) in &parts.net_ifaces {
+        println!(
+            "  端口范围·{name} checkmark={}",
+            item.state() == NSControlStateValueOn
+        );
+    }
+    // 翻转第一个接口再翻回来：勾选态与 prefs 都应跟着走一个来回。
+    // 注意发送方必须是接口项本身 —— handler 要从它的 tag 里读下标。
+    if let Some((name, item)) = parts.net_ifaces.first() {
+        let iface_sender = item.clone();
+        let toggle_and_report = |step: &str| {
+            handler.toggle_net_iface(&iface_sender);
+            let enabled = app.sampler.net_ifaces().contains(name);
+            println!(
+                "after toggleNetIface({name}) {step}: enabled={enabled} prefs={:?}",
+                prefs::net_ifaces()
+            );
+        };
+        toggle_and_report("once");
+        toggle_and_report("again");
+    }
+
+    // 退出动作会先落盘全部设置，再请求 AppKit 终止进程；`terminate:` 会直接
+    // 结束进程，这行之后不会再有输出。
     handler.quit_menu(&sender);
-    println!("quit returned (process is still alive)");
 }

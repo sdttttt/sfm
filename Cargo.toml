@@ -39,9 +39,9 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSValue",
     "NSZone",
 ] }
-# 采样全部经 sysinfo 完成。只用 system 特性，否则默认会拖进 disk/network/
-# component/user，而菜单栏只关心 CPU 与内存。
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+# 采样全部经 sysinfo 完成。只开 system 与 network 两个特性（network 供网速
+# 采样），否则默认会拖进 disk/component/user。
+sysinfo = { version = "0.39", default-features = false, features = ["system", "network"] }
 
 [profile.release]
 lto = true
