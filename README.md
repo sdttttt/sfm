@@ -1,139 +1,49 @@
 # Sfm
 
-菜单栏 CPU / 内存 / 网速监控。纯 Rust，直接调用 AppKit，没有 Electron、没有 WebView、没有运行时依赖。
+macOS 菜单栏 CPU / 内存 / 网速监控，纯 Rust 直接调用 AppKit，无运行时依赖。
 
 ```
-CPU= 13% MEM=10.7G               ← 点击前，菜单栏上就这一行
-CPU= 13% MEM= 67%                ← 切到百分比风格后
-CPU= 13% MEM= 67% ↓ 340K ↑1.2M   ← 网速段可随时隐藏
+CPU= 13% MEM= 67% ↓ 340K ↑1.2M
 ```
 
-## 特性
+## 功能
 
-- **常驻菜单栏**，无 Dock 图标、无窗口、无 app 菜单
-- **标题带标签**：`CPU= 百分比`、`MEM=` 数值与 `↓/↑` 网速并排，一眼看清三项指标
-- **内存两种显示风格**随时切换：占总内存百分比（默认，`67%`）或具体占用大小（`10.7G`）
-- **网速上下行**：菜单里始终有明细行，标题网速段可在「网速显示」里隐藏
-- **端口范围**：逐个网卡接口勾选统计范围，默认勾选全部物理网卡（`en*`）
-- **刷新间隔** 1 / 2 / 5 秒可调
-- 设置（间隔、显示风格、网速开关与端口范围）持久化，重启后保留
-- 约 1600 行代码（含测试），22 项单元测试
+- 菜单栏显示 CPU、内存与上下行网速；内存可切换百分比 / 占用大小两种风格
+- 刷新间隔 1 / 2 / 5 秒
+- 网速统计范围按网卡接口勾选，默认只算物理网卡（`en*`）
+- 所有设置自动保存，重启后保留
 
 ## 构建
 
-需要 Rust 工具链，以及 [cargo-bundle](https://crates.io/crates/cargo-bundle)（仅打包时用得到）：
-
 ```bash
-cargo install cargo-bundle
+cargo install cargo-bundle   # 仅首次
+cargo app                    # 产出 target/release/bundle/osx/Sfm.app
 ```
-
-打包：
-
-```bash
-cargo app
-```
-
-`cargo app` 是 `.cargo/config.toml` 里的别名，等价于 `cargo bundle --release --format osx`。
-产物在 `target/release/bundle/osx/Sfm.app`。
-
-> **为什么必须打成 bundle？**
-> `NSStatusItem` 只有在进程从真实 `.app` 中运行时才会占用菜单栏槽位。直接
-> `cargo run` 或运行 `Contents/MacOS/` 里的裸二进制，菜单栏上不会出现任何东西。
 
 ## 运行
 
 ```bash
-# 正常启动（无终端窗口、无 Dock 图标）
-open target/release/bundle/osx/Sfm.app
-
-# 从终端运行 —— panic 和日志可见，调试用
-cd target/release/bundle/osx/Sfm.app/Contents/MacOS
-./sfm                # 前台运行
-SFM_DEBUG=1 ./sfm    # 每次刷新向 stderr 打一行
-./sfm --selftest     # 无人点击，校验菜单接线并打印显示值
-
-pkill -x sfm         # 停止
+open target/release/bundle/osx/Sfm.app   # 启动
+pkill -x sfm                             # 停止
 ```
 
-> **双击请点 `Sfm.app` 本身**，别点 `Contents/MacOS` 里的二进制 —— Finder 会在
-> Terminal 里运行裸可执行文件，那个窗口看起来就像 app「打开了一个窗口」。
+必须从 `.app` 运行：`NSStatusItem` 只在真实 bundle 中才能占到菜单栏位置，
+`cargo run` 或裸二进制不会显示任何东西（双击也请点 `Sfm.app` 本身）。
+从终端调试时进入 `Sfm.app/Contents/MacOS` 运行 `./sfm`，可加 `SFM_DEBUG=1`
+（每帧打一行）或 `--selftest`（无人点击校验菜单接线）。
 
 ## 测试
 
 ```bash
-cargo test              # 22 项单元测试，无需 GUI
+cargo test
 ```
 
-覆盖字节格式化边界、百分比钳制与除零保护、内存风格持久化往返，外加 sysinfo 采样
-输出的合理性冒烟测试。
-
-UI 接线（菜单 action、勾选状态、状态栏标题是否真的送达 AppKit）无法靠单元测试
-覆盖，用 `--selftest` 实跑验证：
-
-```bash
-cd target/release/bundle/osx/Sfm.app/Contents/MacOS && ./sfm --selftest
-```
-
-第一行 `status item visible: true` 是判断「应用拿到了菜单栏槽位」的关键信号。
+涉及菜单接线的改动需用 `--selftest` 实跑，确认首行 `status item visible: true`。
 
 ## 开机启动
 
-先把 bundle 移到稳定位置（`target/` 会被 `cargo clean` 清掉）：
-
-```bash
-mkdir -p ~/Applications
-cp -R target/release/bundle/osx/Sfm.app ~/Applications/
-```
-
-再安装登录项，详见 [`packaging/macos/com.kms.sfm.launchagent.plist`](packaging/macos/com.kms.sfm.launchagent.plist) 的注释：
-
-```bash
-mkdir -p ~/Library/LaunchAgents
-sed "s#REPLACE_ME#$USER#" packaging/macos/com.kms.sfm.launchagent.plist \
-  > ~/Library/LaunchAgents/com.kms.sfm.plist
-plutil -lint ~/Library/LaunchAgents/com.kms.sfm.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kms.sfm.plist
-```
-
-卸载：
-
-```bash
-launchctl bootout gui/$(id -u)/com.kms.sfm
-rm -f ~/Library/LaunchAgents/com.kms.sfm.plist
-```
-
-## 工作原理
-
-单线程、单主队列 —— 采样只是微秒级的读取，用主队列定时器比「采样线程 + 跨线程
-数据搬运」更简单。`NSApplication.run()` 阻塞在事件循环里，定时器到期和菜单点击都
-由 AppKit 回调进 Rust。
-
-指标读取全部交给 [`sysinfo`](https://crates.io/crates/sysinfo)：
-
-| 指标 | 来源 |
-|---|---|
-| CPU | `System::global_cpu_usage()`（全核平均，`nice` 计入忙） |
-| 已用内存 | `System::used_memory()`（macOS 上为 internal − purgeable + wired + compressed） |
-| 总内存 | `System::total_memory()` |
-| Swap | `System::used_swap()` |
-| 网速 | `NetworkData::received()/transmitted()`（距上次刷新的字节差，按真实间隔换算成字节/秒） |
-
-几个不显然的处理：
-
-- **CPU 首次采样为 0%**：占用率靠两次刷新的差值算，`sysinfo` 首次没有基线
-- **点「立即刷新」时数字可能不变**：`sysinfo` 的 `MINIMUM_CPU_UPDATE_INTERVAL` 会
-  节流，间隔不足 200ms 时沿用它上一次算出的值
-- **百分比右对齐 3 字符** + 等宽数字字体：`9%→10%`、`99%→100%` 时后面的数字不抖动
-- **菜单里始终同时给出内存已用量与总量**，不受状态栏显示风格影响
-- **网速默认只统计物理网卡（`en*`）**：回环、VPN（`utun*`）等虚拟接口默认不计，
-  可在菜单「端口范围」里手动勾选；sysinfo 首次见到新接口时基线就地归零，加上
-  Rust 侧首帧不换算速率，双重保证首帧不会把开机累计量误报成网速
+详见 [packaging/macos/com.kms.sfm.launchagent.plist](packaging/macos/com.kms.sfm.launchagent.plist)。
 
 ## 环境
 
-- macOS 11 或更高
-- Rust 2021 edition
-
-## 贡献
-
-见 [AGENTS.md](AGENTS.md)。
+macOS 11+，Rust 2021 edition。贡献见 [AGENTS.md](AGENTS.md)。
