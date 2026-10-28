@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 打包并发布
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: 缓存 Cargo 构建
+        uses: Swatinem/rust-cache@v2
+
+      - name: 单元测试
+        run: cargo test
+
+      - name: 安装 cargo-bundle
+        run: cargo install cargo-bundle
+
+      # 重复 -t 让 cargo-bundle 分别构建两个架构，再用 lipo 合成通用二进制；
+      # 多目标产物的输出目录是 target/universal/（不是 universal-apple-darwin）。
+      - name: 构建 Sfm.app（通用二进制）
+        run: cargo bundle --release -t aarch64-apple-darwin -t x86_64-apple-darwin --format osx
+
+      # ditto 才能完整保留 .app 内的符号链接与扩展属性，zip 命令会破坏 bundle。
+      - name: 打包 zip
+        run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            target/universal/release/bundle/osx/Sfm.app \
+            dist/Sfm.app.zip
+
+      - name: 创建 Release 并上传产物
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/Sfm.app.zip \
+            --title "$GITHUB_REF_NAME" --generate-notes
